@@ -80,6 +80,7 @@ func (colExecutor *CollectionExecutor) Start() error {
 		// Client is a handle representing a pool of connections, can be use by multi routines
 		// You Can get one idle connection, if all is idle, then always get the same one
 		// connections pool default parameter(min_conn:0 max_conn:100 create_conn_once:2)
+		LOG.Info(i)
 		executors[i] = NewDocExecutor(GenerateDocExecutorId(), colExecutor, colExecutor.conn, colExecutor.syncer)
 		go executors[i].start()
 	}
