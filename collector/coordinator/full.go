@@ -51,7 +51,8 @@ func getTimestampMap(sources []*utils.MongoSource, sslRootFile string) (map[stri
 	var ckptMap map[string]utils.TimestampNode
 	var err error
 
-	ckptMap, _, _, _, _, err = utils.GetAllTimestamp(sources, sslRootFile)
+	query := bson.M{"ns": conf.Options.FilterNamespaceWhite[0]}
+	ckptMap, _, _, _, _, err = utils.GetAllTimestamp(sources, sslRootFile, query)
 	if err != nil {
 		return nil, fmt.Errorf("fetch source all timestamp failed: %v", err)
 	}

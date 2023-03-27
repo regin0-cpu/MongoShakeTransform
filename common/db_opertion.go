@@ -115,9 +115,9 @@ func ApplyOpsFilter(key string) bool {
 }
 
 // get newest oplog
-func GetNewestTimestampBySession(session *mgo.Session) (bson.MongoTimestamp, error) {
+func GetNewestTimestampBySession(session *mgo.Session, query bson.M) (bson.MongoTimestamp, error) {
 	var retMap map[string]interface{}
-	err := session.DB(localDB).C(OplogNS).Find(bson.M{}).Sort("-$natural").Limit(1).One(&retMap)
+	err := session.DB(localDB).C(OplogNS).Find(query).Sort("-$natural").Limit(1).One(&retMap)
 	if err != nil {
 		return 0, err
 	}
@@ -125,16 +125,16 @@ func GetNewestTimestampBySession(session *mgo.Session) (bson.MongoTimestamp, err
 }
 
 // get oldest oplog
-func GetOldestTimestampBySession(session *mgo.Session) (bson.MongoTimestamp, error) {
+func GetOldestTimestampBySession(session *mgo.Session, query bson.M) (bson.MongoTimestamp, error) {
 	var retMap map[string]interface{}
-	err := session.DB(localDB).C(OplogNS).Find(bson.M{}).Limit(1).One(&retMap)
+	err := session.DB(localDB).C(OplogNS).Find(query).Limit(1).One(&retMap)
 	if err != nil {
 		return 0, err
 	}
 	return retMap[QueryTs].(bson.MongoTimestamp), nil
 }
 
-func GetNewestTimestampByUrl(url string, fromMongoS bool, sslRootFile string) (bson.MongoTimestamp, error) {
+func GetNewestTimestampByUrl(url string, fromMongoS bool, sslRootFile string, query bson.M) (bson.MongoTimestamp, error) {
 	var conn *MongoConn
 	var err error
 	if conn, err = NewMongoConn(url, VarMongoConnectModeSecondaryPreferred, true,
@@ -148,10 +148,10 @@ func GetNewestTimestampByUrl(url string, fromMongoS bool, sslRootFile string) (b
 		return date, nil
 	}
 
-	return GetNewestTimestampBySession(conn.Session)
+	return GetNewestTimestampBySession(conn.Session, query)
 }
 
-func GetOldestTimestampByUrl(url string, fromMongoS bool, sslRootFile string) (bson.MongoTimestamp, error) {
+func GetOldestTimestampByUrl(url string, fromMongoS bool, sslRootFile string, query bson.M) (bson.MongoTimestamp, error) {
 	if fromMongoS {
 		return 0, nil
 	}
@@ -164,7 +164,7 @@ func GetOldestTimestampByUrl(url string, fromMongoS bool, sslRootFile string) (b
 	}
 	defer conn.Close()
 
-	return GetOldestTimestampBySession(conn.Session)
+	return GetOldestTimestampBySession(conn.Session, query)
 }
 
 // deprecated
@@ -192,7 +192,7 @@ type TimestampNode struct {
  *     bson.MongoTimestamp: the smallest of the newest timestamp
  *     error: error
  */
-func GetAllTimestamp(sources []*MongoSource, sslRootFile string) (map[string]TimestampNode, bson.MongoTimestamp,
+func GetAllTimestamp(sources []*MongoSource, sslRootFile string, query bson.M) (map[string]TimestampNode, bson.MongoTimestamp,
 	bson.MongoTimestamp, bson.MongoTimestamp, bson.MongoTimestamp, error) {
 	smallestNew := bson.MongoTimestamp(math.MaxInt64)
 	biggestNew := bson.MongoTimestamp(0)
@@ -201,14 +201,14 @@ func GetAllTimestamp(sources []*MongoSource, sslRootFile string) (map[string]Tim
 	tsMap := make(map[string]TimestampNode)
 
 	for _, src := range sources {
-		newest, err := GetNewestTimestampByUrl(src.URL, false, sslRootFile)
+		newest, err := GetNewestTimestampByUrl(src.URL, false, sslRootFile, query)
 		if err != nil {
 			return nil, 0, 0, 0, 0, err
 		} else if newest == 0 {
 			return nil, 0, 0, 0, 0, fmt.Errorf("illegal newest timestamp == 0")
 		}
 
-		oldest, err := GetOldestTimestampByUrl(src.URL, false, sslRootFile)
+		oldest, err := GetOldestTimestampByUrl(src.URL, false, sslRootFile, query)
 		if err != nil {
 			return nil, 0, 0, 0, 0, err
 		}

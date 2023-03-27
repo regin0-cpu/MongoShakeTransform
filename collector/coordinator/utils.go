@@ -4,13 +4,13 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/alibaba/MongoShake/v2/common"
-	"github.com/alibaba/MongoShake/v2/collector/configure"
 	"github.com/alibaba/MongoShake/v2/collector/ckpt"
+	"github.com/alibaba/MongoShake/v2/collector/configure"
 	"github.com/alibaba/MongoShake/v2/collector/reader"
+	"github.com/alibaba/MongoShake/v2/common"
 
-	"github.com/vinllen/mgo/bson"
 	LOG "github.com/vinllen/log4go"
+	"github.com/vinllen/mgo/bson"
 	bson2 "github.com/vinllen/mongo-go-driver/bson"
 )
 
@@ -28,14 +28,14 @@ func (coordinator *ReplicationCoordinator) compareCheckpointAndDbTs(syncModeAll 
 		smallestNew bson.MongoTimestamp
 		err         error
 	)
-
+	query := bson.M{"ns": conf.Options.FilterNamespaceWhite[0]}
 	switch testSelectSyncMode {
 	case true:
 		// only used for unit test
 		tsMap, _, smallestNew, _, _, err = utils.GetAllTimestampInUT()
 	case false:
 		// smallestNew is the smallest of the all newest timestamp
-		tsMap, _, smallestNew, _, _, err = utils.GetAllTimestamp(coordinator.MongoD, conf.Options.MongoSslRootCaFile)
+		tsMap, _, smallestNew, _, _, err = utils.GetAllTimestamp(coordinator.MongoD, conf.Options.MongoSslRootCaFile, query)
 		if err != nil {
 			return 0, nil, false, fmt.Errorf("get all timestamp failed: %v", err)
 		}
