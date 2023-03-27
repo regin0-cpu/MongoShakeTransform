@@ -226,7 +226,7 @@ func (exec *DocExecutor) doSync(docs []*bson.Raw) error {
 		if err := bson.Unmarshal(doc.Data, &stockData); err != nil {
 			LOG.Error("doSync do bson unmarshal %v failed. %v", doc, err)
 		}
-		group_id := stockData["group_id"].(int32)
+		group_id := stockData["group_id"].(int)
 		_, ok := groupIdWhite[int(group_id)]
 		if ok {
 			collection := fmt.Sprintf("stock_new_alone_%d", group_id)
