@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"context"
 	"reflect"
 	"strings"
 
@@ -18,6 +19,18 @@ import (
 
 var ErrorsShouldSkip = map[int]string{
 	61: "ShardKeyNotFound",
+}
+
+func getGroupId(client *utils.MongoCommunityConn, group *OplogsGroup) (interface{}, error) {
+	collection := client.Client.Database("inventory").Collection("stock_new")
+	result := bson.M{}
+	LOG.Debug("开始查询：%v", group.o2)
+	err := collection.FindOne(context.TODO(), group.o2).Decode(&result)
+	if err != nil {
+		LOG.Debug("err3:%v", err)
+		return "", err
+	}
+	return result["group_id"], err
 }
 
 func (exec *Executor) ensureConnection() bool {
@@ -46,7 +59,7 @@ func (exec *Executor) dropConnection() {
 	exec.session = nil
 }
 
-func (exec *Executor) execute(group *OplogsGroup) error {
+func (exec *Executor) execute(group *OplogsGroup, oldDBClint *utils.MongoCommunityConn) error {
 	count := uint64(len(group.oplogRecords))
 	if count == 0 {
 		// probe
@@ -54,6 +67,10 @@ func (exec *Executor) execute(group *OplogsGroup) error {
 	}
 
 	lastOne := group.oplogRecords[count-1]
+
+	groupIdWhite := map[int]int{
+		1: 1,
+	}
 
 	if !conf.Options.IncrSyncExecutorDebug {
 		if !exec.ensureConnection() {
@@ -76,26 +93,42 @@ func (exec *Executor) execute(group *OplogsGroup) error {
 		 */
 		// for indexes
 		// "0" -> database, "1" -> collection
+		groupId := metadata["group_id"]
+		if groupId == nil {
+			groupId, err = getGroupId(oldDBClint, group)
+		}
+		groupIdt := groupId.(int32)
+		if err != nil {
+			LOG.Debug("获取group_id报错：%v", err)
+		}
 		dc := strings.SplitN(group.ns, ".", 2)
+		_, ok := groupIdWhite[int(groupIdt)]
+		dataBase := dc[0]   // 默认库
+		collection := dc[1] //默认集合
+		if ok {
+			collection = fmt.Sprintf("stock_new_alone_%d", groupIdt)
+		} else {
+			collection = fmt.Sprintf("stock_new_many_%d", groupIdt%100)
+		}
 		switch group.op {
 		case "i":
-			err = dbWriter.doInsert(dc[0], dc[1], metadata, group.oplogRecords,
+			err = dbWriter.doInsert(dataBase, collection, metadata, group.oplogRecords,
 				conf.Options.IncrSyncExecutorInsertOnDupUpdate)
 			atomic.AddUint64(&exec.metricInsert, uint64(len(group.oplogRecords)))
 			exec.addNsMapMetric(group.ns, "i", len(group.oplogRecords))
 		case "u":
-			err = dbWriter.doUpdate(dc[0], dc[1], metadata, group.oplogRecords,
+			err = dbWriter.doUpdate(dataBase, collection, metadata, group.oplogRecords,
 				conf.Options.IncrSyncExecutorUpsert)
 			atomic.AddUint64(&exec.metricUpdate, uint64(len(group.oplogRecords)))
 			exec.addNsMapMetric(group.ns, "u", len(group.oplogRecords))
 		case "d":
-			err = dbWriter.doDelete(dc[0], dc[1], metadata, group.oplogRecords)
+			err = dbWriter.doDelete(dataBase, collection, metadata, group.oplogRecords)
 			atomic.AddUint64(&exec.metricDelete, uint64(len(group.oplogRecords)))
 			exec.addNsMapMetric(group.ns, "d", len(group.oplogRecords))
 		case "c":
 			LOG.Info("Replay-%d run DDL with metadata[%v] in db[%v], firstLog: %v", exec.batchExecutor.ReplayerId,
-				dc[0], metadata, group.oplogRecords[0].original.partialLog)
-			err = dbWriter.doCommand(dc[0], metadata, group.oplogRecords)
+				dataBase, metadata, group.oplogRecords[0].original.partialLog)
+			err = dbWriter.doCommand(dataBase, metadata, group.oplogRecords)
 			atomic.AddUint64(&exec.metricDDL, uint64(len(group.oplogRecords)))
 			exec.addNsMapMetric(group.ns, "c", len(group.oplogRecords))
 		case "n":

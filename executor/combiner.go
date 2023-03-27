@@ -2,11 +2,13 @@ package executor
 
 import (
 	LOG "github.com/vinllen/log4go"
+	"github.com/vinllen/mongo-go-driver/bson"
 )
 
 type OplogsGroup struct {
 	ns           string
 	op           string
+	o2           bson.M
 	oplogRecords []*OplogRecord
 
 	completionList []func()
@@ -71,6 +73,7 @@ func (combiner *LogsGroupCombiner) startNewGroup(log *OplogRecord) *OplogsGroup 
 	group := &OplogsGroup{
 		op:           log.original.partialLog.Operation,
 		ns:           log.original.partialLog.Namespace,
+		o2:           bson.M(log.original.partialLog.Query),
 		oplogRecords: []*OplogRecord{log},
 	}
 	if log.original.callback == nil {
