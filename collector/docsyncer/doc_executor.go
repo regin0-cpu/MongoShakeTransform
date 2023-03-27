@@ -1,14 +1,14 @@
 package docsyncer
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"github.com/vinllen/mongo-go-driver/mongo"
 	"sync/atomic"
 
 	conf "github.com/alibaba/MongoShake/v2/collector/configure"
 	utils "github.com/alibaba/MongoShake/v2/common"
-	"github.com/alibaba/MongoShake/v2/oplog"
-
 	"sync"
 
 	LOG "github.com/vinllen/log4go"
@@ -36,6 +36,8 @@ type CollectionExecutor struct {
 	// batchCount int64
 
 	conn *utils.MongoConn
+
+	client *utils.MongoCommunityConn
 
 	docBatch chan []*bson.Raw
 
@@ -178,15 +180,31 @@ func (exec *DocExecutor) start() {
 }
 
 func (exec *DocExecutor) doSync(docs []*bson.Raw) error {
+	groupIdWhite := map[int]int{
+		1: 1,
+	}
 	if len(docs) == 0 || conf.Options.FullSyncExecutorDebug {
 		return nil
 	}
 
 	ns := exec.colExecutor.ns
 
-	var docList []interface{}
+	var models []mongo.WriteModel
 	for _, doc := range docs {
-		docList = append(docList, doc)
+
+		if conf.Options.FullSyncExecutorFilterOrphanDocument && exec.syncer.orphanFilter != nil {
+			var docData bson.D
+			if err := bson.Unmarshal(doc.Data, &docData); err != nil {
+				LOG.Error("doSync do bson unmarshal %v failed. %v", doc, err)
+			}
+			// judge whether is orphan document, pass if so
+			if exec.syncer.orphanFilter.Filter(docData, ns.Database+"."+ns.Collection) {
+				LOG.Info("orphan document [%v] filter", doc)
+				continue
+			}
+		}
+
+		models = append(models, mongo.NewInsertOneModel().SetDocument(doc))
 	}
 
 	// qps limit if enable
@@ -198,76 +216,99 @@ func (exec *DocExecutor) doSync(docs []*bson.Raw) error {
 		var docBeg, docEnd bson.M
 		bson.Unmarshal(docs[0].Data, &docBeg)
 		bson.Unmarshal(docs[len(docs)-1].Data, &docEnd)
-		LOG.Debug("DBSyncer id[%v] doSync with table[%v] batch _id interval [%v, %v]", exec.syncer.id, ns,
-			docBeg["_id"], docEnd["_id"])
+		LOG.Debug("DBSyncer id[%v] doSync BulkWrite with table[%v] batch _id interval [%v, %v]", exec.syncer.id, ns,
+			docBeg, docEnd)
 	}
 
-	collectionHandler := exec.session.DB(ns.Database).C(ns.Collection)
-	bulk := collectionHandler.Bulk()
-	bulk.Insert(docList...)
-	if _, err := bulk.Run(); err != nil {
-		LOG.Warn("insert docs with length[%v] into ns[%v] of dest mongo failed[%v]",
-			len(docList), ns, err)
-		index, errMsg, dup := utils.FindFirstErrorIndexAndMessage(err.Error())
-		if index == -1 {
-			return fmt.Errorf("bulk run failed[%v]", err)
-		} else if !dup {
-			var docD bson.D
-			bson.Unmarshal(docs[index].Data, &docD)
-			return fmt.Errorf("bulk run message[%v], failed[%v], index[%v] dup[%v]", docD, errMsg, index, dup)
-		} else {
-			LOG.Warn("dup error found, try to solve error")
+	for _, doc := range docs {
+		// 分表逻辑 <---->
+		var stockData bson.M
+		if err := bson.Unmarshal(doc.Data, &stockData); err != nil {
+			LOG.Error("doSync do bson unmarshal %v failed. %v", doc, err)
 		}
-
-		return exec.tryOneByOne(docList, index, collectionHandler)
+		group_id := stockData["group_id"].(int32)
+		_, ok := groupIdWhite[int(group_id)]
+		if ok {
+			collection := fmt.Sprintf("stock_new_alone_%d", group_id)
+			_, err := exec.colExecutor.client.Client.Database(ns.Database).Collection(collection).InsertOne(context.TODO(), doc.Data)
+			if err != nil {
+				return fmt.Errorf("insert run failed[%v]", err)
+			}
+		} else {
+			collection := fmt.Sprintf("stock_new_many_%d", group_id%100)
+			_, err := exec.colExecutor.client.Client.Database(ns.Database).Collection(collection).InsertOne(context.TODO(), doc.Data)
+			if err != nil {
+				return fmt.Errorf("insert run failed[%v]", err)
+			}
+		}
 	}
+
+	//collectionHandler := exec.session.DB(ns.Database).C(ns.Collection)
+	//bulk := collectionHandler.Bulk()
+	//bulk.Insert(docList...)
+	//if _, err := bulk.Run(); err != nil {
+	//	LOG.Warn("insert docs with length[%v] into ns[%v] of dest mongo failed[%v]",
+	//		len(docList), ns, err)
+	//	index, errMsg, dup := utils.FindFirstErrorIndexAndMessage(err.Error())
+	//	if index == -1 {
+	//		return fmt.Errorf("bulk run failed[%v]", err)
+	//	} else if !dup {
+	//		var docD bson.D
+	//		bson.Unmarshal(docs[index].Data, &docD)
+	//		return fmt.Errorf("bulk run message[%v], failed[%v], index[%v] dup[%v]", docD, errMsg, index, dup)
+	//	} else {
+	//		LOG.Warn("dup error found, try to solve error")
+	//	}
+	//
+	//	return exec.tryOneByOne(docList, index, collectionHandler)
+	//}
 
 	return nil
 }
 
 // heavy operation. insert data one by one and handle the return error.
-func (exec *DocExecutor) tryOneByOne(input []interface{}, index int, collectionHandler *mgo.Collection) error {
-	for i := index; i < len(input); i++ {
-		raw := input[i]
-		var docD bson.D
-		if err := bson.Unmarshal(raw.(*bson.Raw).Data, &docD); err != nil {
-			return fmt.Errorf("unmarshal data[%v] failed[%v]", raw, err)
-		}
-
-		err := collectionHandler.Insert(docD)
-		if err == nil {
-			continue
-		} else if !mgo.IsDup(err) {
-			return err
-		}
-
-		// only handle duplicate key error
-		id := oplog.GetKey(docD, "")
-
-		// orphan document enable and source is sharding
-		if conf.Options.FullSyncExecutorFilterOrphanDocument && exec.syncer.orphanFilter != nil {
-			// judge whether is orphan document, pass if so
-			if exec.syncer.orphanFilter.Filter(docD, collectionHandler.FullName) {
-				LOG.Info("orphan document with _id[%v] filter", id)
-				continue
-			}
-		}
-
-		if !conf.Options.FullSyncExecutorInsertOnDupUpdate {
-			return fmt.Errorf("duplicate key error[%v], you can clean the document on the target mongodb, "+
-				"or enable %v to solve, but full-sync stage needs restart",
-				err, "full_sync.executor.insert_on_dup_update")
-		} else {
-			// convert insert operation to update operation
-			if id == nil {
-				return fmt.Errorf("parse '_id' from document[%v] failed", docD)
-			}
-			if err := collectionHandler.UpdateId(id, docD); err != nil {
-				return fmt.Errorf("convert oplog[%v] from insert to update run failed[%v]", docD, err)
-			}
-		}
-	}
-
-	// all finish
-	return nil
-}
+//func (exec *DocExecutor) tryOneByOne(input []interface{}, index int, collectionHandler *mgo.Collection) error {
+//	for i := index; i < len(input); i++ {
+//		raw := input[i]
+//		var docD bson.D
+//		if err := bson.Unmarshal(raw.(*bson.Raw).Data, &docD); err != nil {
+//			return fmt.Errorf("unmarshal data[%v] failed[%v]", raw, err)
+//		}
+//
+//		err := collectionHandler.Insert(docD)
+//		if err == nil {
+//			continue
+//		} else if !mgo.IsDup(err) {
+//			return err
+//		}
+//
+//		// only handle duplicate key error
+//		id := oplog.GetKey(docD, "")
+//
+//		// orphan document enable and source is sharding
+//		if conf.Options.FullSyncExecutorFilterOrphanDocument && exec.syncer.orphanFilter != nil {
+//			// judge whether is orphan document, pass if so
+//			if exec.syncer.orphanFilter.Filter(docD, collectionHandler.FullName) {
+//				LOG.Info("orphan document with _id[%v] filter", id)
+//				continue
+//			}
+//		}
+//
+//		if !conf.Options.FullSyncExecutorInsertOnDupUpdate {
+//			return fmt.Errorf("duplicate key error[%v], you can clean the document on the target mongodb, "+
+//				"or enable %v to solve, but full-sync stage needs restart",
+//				err, "full_sync.executor.insert_on_dup_update")
+//		} else {
+//			// convert insert operation to update operation
+//			if id == nil {
+//				return fmt.Errorf("parse '_id' from document[%v] failed", docD)
+//			}
+//			if err := collectionHandler.UpdateId(id, docD); err != nil {
+//				return fmt.Errorf("convert oplog[%v] from insert to update run failed[%v]", docD, err)
+//			}
+//		}
+//	}
+//
+//	// all finish
+//	return nil
+//}
