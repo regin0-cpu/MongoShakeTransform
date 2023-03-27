@@ -1,7 +1,6 @@
 package docsyncer
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"github.com/vinllen/mongo-go-driver/mongo"
@@ -219,7 +218,7 @@ func (exec *DocExecutor) doSync(docs []*bson.Raw) error {
 		LOG.Debug("DBSyncer id[%v] doSync BulkWrite with table[%v] batch _id interval [%v, %v]", exec.syncer.id, ns,
 			docBeg, docEnd)
 	}
-
+	collectionHandler := exec.session.DB(ns.Database).C(ns.Collection)
 	for _, doc := range docs {
 		// 分表逻辑 <---->
 		var stockData bson.M
@@ -230,17 +229,22 @@ func (exec *DocExecutor) doSync(docs []*bson.Raw) error {
 		_, ok := groupIdWhite[int(group_id)]
 		if ok {
 			collection := fmt.Sprintf("stock_new_alone_%d", group_id)
-			_, err := exec.colExecutor.client.Client.Database(ns.Database).Collection(collection).InsertOne(context.TODO(), doc.Data)
-			if err != nil {
-				return fmt.Errorf("insert run failed[%v]", err)
-			}
+			collectionHandler = exec.session.DB(ns.Database).C(collection)
 		} else {
 			collection := fmt.Sprintf("stock_new_many_%d", group_id%100)
-			_, err := exec.colExecutor.client.Client.Database(ns.Database).Collection(collection).InsertOne(context.TODO(), doc.Data)
-			if err != nil {
-				return fmt.Errorf("insert run failed[%v]", err)
-			}
+			collectionHandler = exec.session.DB(ns.Database).C(collection)
 		}
+		var docD bson.D
+		if err := bson.Unmarshal(doc.Data, &docD); err != nil {
+			return fmt.Errorf("unmarshal data[%v] failed[%v]", doc.Data, err)
+		}
+		err := collectionHandler.Insert(docD)
+		if err == nil {
+			continue
+		} else if !mgo.IsDup(err) {
+			return err
+		}
+
 	}
 
 	//collectionHandler := exec.session.DB(ns.Database).C(ns.Collection)
@@ -266,7 +270,7 @@ func (exec *DocExecutor) doSync(docs []*bson.Raw) error {
 	return nil
 }
 
-// heavy operation. insert data one by one and handle the return error.
+//heavy operation. insert data one by one and handle the return error.
 //func (exec *DocExecutor) tryOneByOne(input []interface{}, index int, collectionHandler *mgo.Collection) error {
 //	for i := index; i < len(input); i++ {
 //		raw := input[i]
