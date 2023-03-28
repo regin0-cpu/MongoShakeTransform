@@ -242,7 +242,7 @@ func (exec *Executor) doSync(logs []*OplogRecord) error {
 	oplogGroups := LogsGroupCombiner{maxGroupNr: OplogsMaxGroupNum,
 		maxGroupSize: OplogsMaxGroupSize}.mergeToGroups(transLogs)
 
-	oldDBClint, err := utils.NewMongoCommunityConn(conf.Options.MongoUrls[0], "", false, "", "")
+	oldDBClint, err := utils.NewMongoCommunityConn(conf.Options.MongoUrls[0], conf.Options.MongoConnectMode, false, "", "")
 	if err != nil {
 		LOG.Debug("连接就数据库失败:%v", err)
 		LOG.Error(err)
