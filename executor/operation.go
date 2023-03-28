@@ -97,7 +97,7 @@ func (exec *Executor) execute(group *OplogsGroup, oldDBClint *utils.MongoCommuni
 		if groupId == nil {
 			groupId, err = getGroupId(oldDBClint, group)
 		}
-		groupIdt := groupId.(int32)
+		groupIdt := groupId.(int)
 		if err != nil {
 			LOG.Debug("获取group_id报错：%v", err)
 		}
