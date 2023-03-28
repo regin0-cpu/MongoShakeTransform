@@ -21,16 +21,21 @@ var ErrorsShouldSkip = map[int]string{
 	61: "ShardKeyNotFound",
 }
 
-func getGroupId(client *utils.MongoCommunityConn, group *OplogsGroup) (interface{}, error) {
+func getGroupId(client *utils.MongoCommunityConn, group *OplogsGroup) (int, error) {
 	collection := client.Client.Database("inventory").Collection("stock_new")
 	result := bson.M{}
 	LOG.Debug("开始查询：%v", group.o2)
 	err := collection.FindOne(context.TODO(), group.o2).Decode(&result)
 	if err != nil {
 		LOG.Debug("err3:%v", err)
-		return "", err
+		return 0, err
 	}
-	return result["group_id"], err
+	groupId, ok := result["group_id"].(int)
+	LOG.Debug("groupId: %v", groupId)
+	if !ok {
+		return 0, err
+	}
+	return groupId, err
 }
 
 func (exec *Executor) ensureConnection() bool {
@@ -93,22 +98,21 @@ func (exec *Executor) execute(group *OplogsGroup, oldDBClint *utils.MongoCommuni
 		 */
 		// for indexes
 		// "0" -> database, "1" -> collection
-		groupId := metadata["group_id"]
-		if groupId == nil {
+		groupId, ok1 := metadata["group_id"].(int)
+		if !ok1 {
 			groupId, err = getGroupId(oldDBClint, group)
 		}
-		groupIdt := groupId.(int)
 		if err != nil {
 			LOG.Debug("获取group_id报错：%v", err)
 		}
 		dc := strings.SplitN(group.ns, ".", 2)
-		_, ok := groupIdWhite[int(groupIdt)]
+		_, ok := groupIdWhite[groupId]
 		dataBase := dc[0]   // 默认库
 		collection := dc[1] //默认集合
 		if ok {
-			collection = fmt.Sprintf("stock_new_alone_%d", groupIdt)
+			collection = fmt.Sprintf("stock_new_alone_%d", groupId)
 		} else {
-			collection = fmt.Sprintf("stock_new_many_%d", groupIdt%100)
+			collection = fmt.Sprintf("stock_new_many_%d", groupId%100)
 		}
 		switch group.op {
 		case "i":
