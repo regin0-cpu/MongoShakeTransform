@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"github.com/vinllen/mongo-go-driver/mongo"
 	"reflect"
 	"strings"
 
@@ -21,8 +22,7 @@ var ErrorsShouldSkip = map[int]string{
 	61: "ShardKeyNotFound",
 }
 
-func getGroupId(client *utils.MongoCommunityConn, group *OplogsGroup) (int, error) {
-	collection := client.Client.Database("inventory").Collection("stock_new")
+func getGroupId(collection *mongo.Collection, group *OplogsGroup) (int, error) {
 	result := bson.M{}
 	LOG.Debug("开始查询：%v", group.o2)
 	err := collection.FindOne(context.TODO(), group.o2).Decode(&result)
@@ -64,7 +64,7 @@ func (exec *Executor) dropConnection() {
 	exec.session = nil
 }
 
-func (exec *Executor) execute(group *OplogsGroup, oldDBClint *utils.MongoCommunityConn) error {
+func (exec *Executor) execute(group *OplogsGroup, collection *mongo.Collection) error {
 	count := uint64(len(group.oplogRecords))
 	if count == 0 {
 		// probe
@@ -100,7 +100,7 @@ func (exec *Executor) execute(group *OplogsGroup, oldDBClint *utils.MongoCommuni
 		// "0" -> database, "1" -> collection
 		groupId, ok1 := metadata["group_id"].(int)
 		if !ok1 {
-			groupId, err = getGroupId(oldDBClint, group)
+			groupId, err = getGroupId(collection, group)
 		}
 		if err != nil {
 			LOG.Debug("获取group_id报错：%v", err)

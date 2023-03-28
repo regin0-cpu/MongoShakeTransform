@@ -247,8 +247,9 @@ func (exec *Executor) doSync(logs []*OplogRecord) error {
 		LOG.Debug("连接就数据库失败:%v", err)
 		LOG.Error(err)
 	}
+	collection := oldDBClint.Client.Database("inventory").Collection("stock_new")
 	for _, group := range oplogGroups {
-		if err := exec.execute(group, oldDBClint); err != nil {
+		if err := exec.execute(group, collection); err != nil {
 			return err
 		}
 	}
